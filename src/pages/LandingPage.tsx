@@ -33,7 +33,7 @@ const LandingPage = () => {
             </h1>
             <div className="space-y-4 animate-fade-in-up animation-delay-200">
               <p className="text-xl opacity-90">
-                Enabling teachers to easily develop AI integrating courses and learning/experiential modules for students to engage with and learn.
+                Providing teachers AI assistance to easily co-develop AI integrated courses and learning/experiential modules for their students to engage with and learn.
               </p>
               <p className="text-xl opacity-90">
                 We measure learning and skill growth and accelerate learning to empower any young person anywhere.

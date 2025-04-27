@@ -73,7 +73,10 @@ Your goal is to help the teacher create a learning module that is:
 - Engaging for students
 - Practically implementable
 - Effectively leverages AI
-- Measurably impactful`;
+- Measurably impactful
+
+In communicating with the teacher, if you have a guiding question or comment, or are seeking clarification, ask
+only one at a time. Wait for a response before offering another. It's very important to not overwhelm the the teacher with information.`;
 
 const CreatePage = () => {
   const { isAuthenticated, user } = useAuth();
@@ -114,20 +117,19 @@ const CreatePage = () => {
     setMessages([
       {
         role: 'assistant',
-        content: `Welcome! I'm excited to help you create an engaging and effective learning module titled "${moduleTitle}". Let's start by understanding your vision for this module.
-
-1. What are the main concepts or skills you want your students to learn?
-2. Can you tell me about your students' current knowledge level and background?
-3. What challenges have you observed in teaching this content previously?
-
-I can help you develop:
-- Clear learning objectives
-- Engaging activities and assessments
-- Integration of AI tools
-- Detailed rubrics
-- Support materials
-
-Share your thoughts, and we'll work together to create an exceptional learning experience.`
+        content: [
+          `Welcome! I'm excited to help you create an engaging and effective learning module titled "${moduleTitle}". Let's start by understanding your vision for this module.\n\n`,
+          '1. What are the main concepts or skills you want your students to learn?\n',
+          '2. Can you tell me about your students\' current knowledge level and background?\n',
+          '3. What challenges have you observed in teaching this content previously?\n\n',
+          'I can help you develop:\n',
+          '- Clear learning objectives\n',
+          '- Engaging activities and assessments\n',
+          '- Integration of AI tools\n',
+          '- Detailed rubrics\n',
+          '- Support materials\n\n',
+          'Share your thoughts, and we\'ll work together to create an exceptional learning experience.'
+        ].join('')
       }
     ]);
   };
