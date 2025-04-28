@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Send, RotateCcw, Download, Copy, BookOpen, Sparkles, HelpCircle, Cpu, Upload } from 'lucide-react';
+import { Send, RotateCcw, Download, Copy, BookOpen, Sparkles, HelpCircle, Cpu, Upload, X } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import OpenAI from 'openai';
 import { supabase } from '../lib/supabase';
@@ -12,21 +12,26 @@ interface Message {
   content: string;
 }
 
+interface UploadedFile {
+  name: string;
+  url: string;
+}
+
 const openai = new OpenAI({
   apiKey: import.meta.env.VITE_OPENAI_API_KEY,
   dangerouslyAllowBrowser: true
 });
 
-const SYSTEM_PROMPT = `You are an expert AI education assistant collaborating with a teacher to develop an innovative, AI-integrated experiential learning module. Your role is to be both supportive and constructively critical, helping the teacher create the most effective learning experience possible.
+const systemPrompt = `You are an expert AI education assistant collaborating with a teacher to develop an innovative, AI-integrated experiential learning module. Your role is to be both supportive and constructively critical, helping the teacher create the most effective learning experience possible.
 
 For each step of the module development process:
 
-1. Ask targeted questions about the teacher's plans
+1. Ask targeted questions (but only 1 at a time) about the teacher's plans
 2. Offer specific suggestions and alternatives to consider
 3. Provide examples and best practices
 4. Help refine and strengthen their ideas
 5. Point out potential challenges or areas that might need more development
-6. Suggest ways to enhance student engagement and learning outcomes
+6. Suggest ways to enhance student engagement and learning outcomes.
 
 Key Areas to Address (Guide the discussion through these topics, but be flexible with the order based on the conversation flow):
 
@@ -40,25 +45,37 @@ Key Areas to Address (Guide the discussion through these topics, but be flexible
 - Suggest: Additional objectives that align with the topic
 - Offer: Ways to make objectives more measurable and actionable
 
-3. AI Integration Strategy
-- Ask about: Planned use of AI tools and technologies
-- Suggest: Innovative ways to incorporate AI meaningfully
+3. Knowledge Sources
+- Ask about: If there are specific knowledge sources that should be referenced by students to guide the AI to advance their learning. If so, ask how they should should be used to guide learning and doing. 
+- Suggest: Additional options that align with the topic
+- Offer: Ways to make objectives more measurable and actionable
+
+4. AI Integration Strategy
+- Start with: The student learning assistant default strategy for the AI is to leverage a constructivist learning pedagogy to help students construct their own knowledge rather than directing it and providing answers. That the goal is to help student understand and apply through their own thinking. Confirm that this pedagogy makes sense for the educator. 
+- Ask about: Other ways that AI could be employed --- as a simulated partner (e.g., playing the role of a practitioner), etc...
+- Suggest: Innovative ways to incorporate AI meaningfully that could be an asset to the learning examples provided. 
 - Offer: Examples of successful AI integration in similar contexts
 
-4. Assessment Strategy
-- Ask about: How learning will be evaluated
-- Suggest: Multiple assessment methods (formative and summative)
+5. Assessment Strategy
+- Start with: Start by saying that the AI default assessment is to assess learning objectives in terms of Bloom's taxonomy of learning and assess demonstration of skills (critical thinking, problem-solving, creativity, and communications); both numerically and with evidence. Confirm that this would be desirable.  Note also that the learning AI facilitation will strive to help the student improve their lowest scores. 
+- Ask about: What other  things should be assessed, such as class discussions, proposals, etc...
+- Ask whether they would like the AI to develop rubrics for the assessment. 
 - Offer: To help develop detailed rubrics for deliverables
 
-5. Experiential Learning Activities
+6. Experiential Learning Activities
 - Ask about: Planned hands-on activities and projects
 - Suggest: Ways to make activities more engaging and relevant
 - Offer: Additional activity ideas and real-world connections
 
-6. Support & Scaffolding
-- Ask about: How students will be supported through challenging concepts
-- Suggest: Additional support mechanisms and resources
+7. Support & Scaffolding
+- Start with: Describe that the default AI facilitation strategy is based upon a constructivist approach whereby students are asked to construct their own knowledge and the ability to apply it and not be provided answers. Confirm that this would be ok for them. 
+- Ask about: Other specific support and scaffolding they'd like the AI learning assistant to offer. 
 - Offer: Examples of effective scaffolding strategies
+
+8. Special Instructions for AI
+- Ask about: If there are module specific instructions, such as using symbolic math or providing visual resources to augment learning. Provide examples.
+- Suggest: Additional specific instructions to influence the AI's communication with students.
+- Offer: Examples of effective mathematic or visual learning.
 
 Remember to:
 - Be encouraging while also pushing for excellence
@@ -75,11 +92,11 @@ Your goal is to help the teacher create a learning module that is:
 - Effectively leverages AI
 - Measurably impactful
 
-In communicating with the teacher, if you have a guiding question or comment, or are seeking clarification, ask
-only one at a time. Wait for a response before offering another. It's very important to not overwhelm the the teacher with information.`;
+In communicating with the teacher, if you have a guiding question or comment, or are seeking clarification, ask only one at a time. Wait for a response before offering another. It's very important to not overwhelm the teacher with information.
+`;
 
 const CreatePage = () => {
-  const { isAuthenticated, user } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [started, setStarted] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -87,6 +104,8 @@ const CreatePage = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
   const [moduleTitle, setModuleTitle] = useState('');
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
   const chatHistoryRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -147,7 +166,7 @@ const CreatePage = () => {
       const completion = await openai.chat.completions.create({
         model: 'gpt-4o',
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: systemPrompt },
           ...messages.map(msg => ({
             role: msg.role,
             content: msg.content
@@ -172,11 +191,63 @@ const CreatePage = () => {
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      toast.success(`File "${file.name}" uploaded successfully`);
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+    const uploadPromises: Promise<UploadedFile | null>[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `${user?.id}/${selectedCourseId}/${fileName}`;
+
+      uploadPromises.push(
+        supabase.storage
+          .from('knowledge-sources')
+          .upload(filePath, file)
+          .then(async ({ data, error }) => {
+            if (error) {
+              console.error('Upload error:', error);
+              toast.error(`Failed to upload ${file.name}`);
+              return null;
+            }
+
+            const { data: { publicUrl } } = supabase.storage
+              .from('knowledge-sources')
+              .getPublicUrl(data.path);
+
+            return {
+              name: file.name,
+              url: publicUrl
+            };
+          })
+      );
     }
+
+    try {
+      const results = await Promise.all(uploadPromises);
+      const successfulUploads = results.filter((result): result is UploadedFile => result !== null);
+      
+      if (successfulUploads.length > 0) {
+        setUploadedFiles(prev => [...prev, ...successfulUploads]);
+        toast.success(`Successfully uploaded ${successfulUploads.length} file(s)`);
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error('Failed to upload files');
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const removeFile = (index: number) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleGenerateModule = async () => {
@@ -194,7 +265,7 @@ const CreatePage = () => {
     try {
       // Create a summary of the conversation first
       const summaryCompletion = await openai.chat.completions.create({
-        model: 'gpt-4',
+        model: 'gpt-4o',
         messages: [
           {
             role: 'system',
@@ -213,7 +284,7 @@ const CreatePage = () => {
 
       // Generate the full module using the summary
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4',
+        model: 'gpt-4o',
         messages: [
           { 
             role: 'system', 
@@ -249,6 +320,7 @@ const CreatePage = () => {
               course_id: selectedCourseId,
               title: moduleTitle,
               description: moduleContent,
+              knowledge_sources: uploadedFiles.map(file => file.url)
             },
           ]);
 
@@ -266,6 +338,7 @@ const CreatePage = () => {
         document.body.removeChild(a);
         
         toast.success('Learning module generated and saved successfully');
+        navigate('/courses');
       } else {
         throw new Error('No response from OpenAI');
       }
@@ -319,7 +392,6 @@ const CreatePage = () => {
           <div className="space-y-6">
             {/* Chat History */}
             <div 
-              ref={chatHistoryRef}
               className="bg-white rounded-lg shadow-sm p-4 h-[400px] overflow-y-auto"
             >
               {messages.map((message, index) => (
@@ -341,6 +413,7 @@ const CreatePage = () => {
                   <div className="animate-pulse">Thinking...</div>
                 </div>
               )}
+              <div ref={chatHistoryRef} />
             </div>
 
             {/* Input Form */}
@@ -353,24 +426,7 @@ const CreatePage = () => {
                   className="w-full h-32 p-4 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
                   disabled={isLoading}
                 />
-                <div className="absolute bottom-4 right-4 flex space-x-2">
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="p-2 text-gray-500 hover:text-primary"
-                    title="Upload file"
-                  >
-                    <Upload className="w-5 h-5" />
-                  </button>
-                </div>
               </div>
-              
-              <input
-                ref={fileInputRef}
-                type="file"
-                onChange={handleFileUpload}
-                className="hidden"
-              />
 
               <div className="flex space-x-4">
                 <button
@@ -393,6 +449,54 @@ const CreatePage = () => {
                 </button>
               </div>
             </form>
+
+            {/* Knowledge Sources */}
+            <div className="bg-white rounded-lg shadow-sm p-4">
+              <h3 className="text-lg font-medium mb-4">Knowledge Sources</h3>
+              <div className="space-y-4">
+                {/* Uploaded Files List */}
+                {uploadedFiles.length > 0 && (
+                  <div className="space-y-2">
+                    {uploadedFiles.map((file, index) => (
+                      <div key={index} className="flex items-center justify-between bg-gray-50 p-2 rounded">
+                        <span className="text-sm truncate">{file.name}</span>
+                        <button
+                          onClick={() => removeFile(index)}
+                          className="p-1 hover:text-error"
+                          title="Remove file"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Upload Button */}
+                <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploading}
+                    className="btn-outline py-2 px-4 text-sm"
+                  >
+                    <Upload className="w-4 h-4 mr-2 inline-block" />
+                    {isUploading ? 'Uploading...' : 'Upload Knowledge Sources'}
+                  </button>
+                  <span className="text-sm text-gray-500">
+                    Upload PDFs, documents, or other learning materials
+                  </span>
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                  multiple
+                  accept=".pdf,.doc,.docx,.txt"
+                />
+              </div>
+            </div>
           </div>
         )}
       </div>
