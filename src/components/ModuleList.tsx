@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { X, Download, Eye, Save, Edit2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Download, Eye, Save, Edit2, CheckCircle, Clock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { toast } from 'react-hot-toast';
@@ -17,6 +17,12 @@ interface ModuleListProps {
   courseId: string;
 }
 
+interface ModuleEnrollment {
+  learning_module_id: string;
+  status: 'not_started' | 'started' | 'completed';
+  saved_avg_score?: number;
+}
+
 const ModuleList = ({ modules, onClose, courseId }: ModuleListProps) => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -27,18 +33,93 @@ const ModuleList = ({ modules, onClose, courseId }: ModuleListProps) => {
   const [isEditing, setIsEditing] = useState<{ [key: string]: boolean }>({});
   const [editedTitles, setEditedTitles] = useState<{ [key: string]: string }>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [enrollments, setEnrollments] = useState<ModuleEnrollment[]>([]);
+  const [isLoadingEnrollments, setIsLoadingEnrollments] = useState(true);
+  const [userRole, setUserRole] = useState<'teacher' | 'student' | null>(null);
+
+  // Fetch user role
+  useEffect(() => {
+    const fetchUserRole = async () => {
+      if (!user) return;
+      
+      try {
+        const { data, error } = await supabase
+          .from('user_profiles')
+          .select('role')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (error) throw error;
+        setUserRole(data?.role as 'teacher' | 'student' | null);
+      } catch (error) {
+        console.error('Error fetching user role:', error);
+      }
+    };
+
+    fetchUserRole();
+  }, [user]);
+
+  // Fetch module enrollments
+  useEffect(() => {
+    const fetchModuleEnrollments = async () => {
+      if (!user) return;
+      
+      try {
+        setIsLoadingEnrollments(true);
+        const { data, error } = await supabase
+          .from('module_enrollments')
+          .select('learning_module_id, status, saved_avg_score')
+          .eq('user_id', user.id);
+        
+        if (error) throw error;
+        
+        setEnrollments(data || []);
+        console.log('Module enrollments loaded:', data);
+      } catch (error) {
+        console.error('Error fetching module enrollments:', error);
+      } finally {
+        setIsLoadingEnrollments(false);
+      }
+    };
+
+    if (user && userRole === 'student') {
+      fetchModuleEnrollments();
+    }
+  }, [user, userRole]);
+
+  // Debug function - always run this when component mounts to help diagnose the routing issue
+  useEffect(() => {
+    // Log the available routes and possible configurations
+    console.log('[ModuleList] Current route path:', window.location.pathname);
+    console.log('[ModuleList] Course ID:', courseId);
+    
+    // Check the router paths your app might be using
+    console.log('[ModuleList] Possible route paths to try:');
+    console.log(`1. /learning/${courseId}`);
+    console.log(`2. /learning/${courseId}/:moduleId`);
+    console.log(`3. /learn/${courseId}/:moduleId`);
+    console.log(`4. /learning/:moduleId`);
+    console.log(`5. /learn/:moduleId`);
+  }, [courseId]);
 
   const handleModuleSelect = async (module: Module) => {
     if (!user) return;
+
+    // Check if module is completed
+    const isCompleted = getModuleStatus(module.learning_module_id) === 'completed';
+    if (isCompleted) {
+      toast.info('This module has already been completed');
+      return;
+    }
 
     try {
       // First check if enrollment already exists
       const { data: existingEnrollment, error: checkError } = await supabase
         .from('module_enrollments')
-        .select('enrollment_id')
+        .select('enrollment_id, status')
         .eq('learning_module_id', module.learning_module_id)
         .eq('user_id', user.id)
-        .single();
+        .maybeSingle();
 
       if (checkError && !checkError.message.includes('No rows found')) {
         throw checkError;
@@ -54,19 +135,51 @@ const ModuleList = ({ modules, onClose, courseId }: ModuleListProps) => {
               user_id: user.id,
               status: 'not_started'
             }
-          ])
-          .single();
+          ]);
 
         if (enrollmentError) {
           throw enrollmentError;
         }
       }
 
-      // Navigate to the learning page
-      navigate(`/learn/${courseId}/${module.learning_module_id}`);
+      // Log what's happening
+      console.log(`[ModuleList] Attempting to navigate to module: ${module.learning_module_id}`);
+      
+      // Try multiple possible routes - add this to avoid the navigation error
+      try {
+        // First try - this might be the expected format in your app based on the error
+        window.location.href = `/learning/${module.learning_module_id}`;
+        return;
+      } catch (error) {
+        console.error("[ModuleList] Direct navigation attempt failed:", error);
+      }
+
+      // Fallback attempts with different URL patterns
+      try {
+        navigate(`/learning/${module.learning_module_id}`);
+      } catch (error) {
+        console.error("[ModuleList] First navigation attempt failed:", error);
+        try {
+          navigate(`/learn/${module.learning_module_id}`);
+        } catch (error) {
+          console.error("[ModuleList] Second navigation attempt failed:", error);
+          try {
+            navigate(`/learning/${courseId}/${module.learning_module_id}`);
+          } catch (error) {
+            console.error("[ModuleList] Third navigation attempt failed:", error);
+            try {
+              navigate(`/learn/${courseId}/${module.learning_module_id}`);
+            } catch (error) {
+              console.error("[ModuleList] All navigation attempts failed:", error);
+              // Final fallback
+              toast.error("Navigation failed. Please check console for details.");
+            }
+          }
+        }
+      }
     } catch (error) {
-      console.error('Error enrolling in module:', error);
-      toast.error('Failed to enroll in module');
+      console.error('Error handling module selection:', error);
+      toast.error('Failed to process module selection');
     }
   };
 
@@ -154,6 +267,50 @@ const ModuleList = ({ modules, onClose, courseId }: ModuleListProps) => {
     }
   };
 
+  // Module status helpers
+  const getModuleStatus = (moduleId: string): 'not_started' | 'started' | 'completed' => {
+    const enrollment = enrollments.find(e => e.learning_module_id === moduleId);
+    return enrollment?.status || 'not_started';
+  };
+
+  const getButtonText = (moduleId: string): string => {
+    const status = getModuleStatus(moduleId);
+    switch (status) {
+      case 'completed':
+        return 'Completed';
+      case 'started':
+        return 'Continue';
+      default:
+        return 'Select Module';
+    }
+  };
+
+  const isModuleCompleted = (moduleId: string): boolean => {
+    return getModuleStatus(moduleId) === 'completed';
+  };
+
+  const getStatusIcon = (moduleId: string) => {
+    const status = getModuleStatus(moduleId);
+    if (status === 'completed') {
+      return <CheckCircle className="w-4 h-4 text-green-600 mr-1" />;
+    }
+    if (status === 'started') {
+      return <Clock className="w-4 h-4 text-blue-600 mr-1" />;
+    }
+    return null;
+  };
+
+  const getStatusClass = (moduleId: string): string => {
+    const status = getModuleStatus(moduleId);
+    if (status === 'completed') {
+      return 'text-green-600';
+    }
+    if (status === 'started') {
+      return 'text-blue-600';
+    }
+    return '';
+  };
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg w-full max-w-4xl max-h-[80vh] overflow-hidden">
@@ -173,12 +330,18 @@ const ModuleList = ({ modules, onClose, courseId }: ModuleListProps) => {
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-3 px-4">Module Title</th>
+                    <th className="text-left py-3 px-4">Status</th>
                     <th className="text-right py-3 px-4">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {modules.map((module) => (
-                    <tr key={module.learning_module_id} className="border-b border-gray-100">
+                    <tr 
+                      key={module.learning_module_id} 
+                      className={`border-b border-gray-100 ${
+                        isModuleCompleted(module.learning_module_id) ? 'bg-gray-50' : ''
+                      }`}
+                    >
                       <td className="py-3 px-4">
                         {isEditing[module.learning_module_id] ? (
                           <div className="flex items-center gap-2">
@@ -202,22 +365,47 @@ const ModuleList = ({ modules, onClose, courseId }: ModuleListProps) => {
                         ) : (
                           <div className="flex items-center gap-2">
                             <span>{module.title}</span>
-                            <button
-                              onClick={() => startTitleEditing(module.learning_module_id, module.title)}
-                              className="text-gray-400 hover:text-gray-600"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
+                            {userRole === 'teacher' && (
+                              <button
+                                onClick={() => startTitleEditing(module.learning_module_id, module.title)}
+                                className="text-gray-400 hover:text-gray-600"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         )}
+                      </td>
+                      <td className={`py-3 px-4 ${getStatusClass(module.learning_module_id)}`}>
+                        <div className="flex items-center">
+                          {getStatusIcon(module.learning_module_id)}
+                          <span>
+                            {getModuleStatus(module.learning_module_id) === 'completed' && 'Completed'}
+                            {getModuleStatus(module.learning_module_id) === 'started' && 'In Progress'}
+                            {getModuleStatus(module.learning_module_id) === 'not_started' && 'Not Started'}
+                          </span>
+                          {enrollments.find(e => 
+                            e.learning_module_id === module.learning_module_id && 
+                            e.saved_avg_score !== undefined
+                          )?.saved_avg_score && (
+                            <span className="ml-2 text-xs bg-gray-100 px-2 py-0.5 rounded-full">
+                              Score: {enrollments.find(e => e.learning_module_id === module.learning_module_id)?.saved_avg_score?.toFixed(1)}/5
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-4">
                         <div className="flex justify-end gap-2">
                           <button
                             onClick={() => handleModuleSelect(module)}
-                            className="btn-primary py-1 px-3"
+                            className={`${
+                              isModuleCompleted(module.learning_module_id) 
+                                ? 'bg-gray-100 text-gray-500 cursor-not-allowed' 
+                                : 'btn-primary'
+                            } py-1 px-3`}
+                            disabled={isModuleCompleted(module.learning_module_id)}
                           >
-                            Select Module
+                            {getButtonText(module.learning_module_id)}
                           </button>
                           <button
                             onClick={() => {
@@ -229,12 +417,14 @@ const ModuleList = ({ modules, onClose, courseId }: ModuleListProps) => {
                           >
                             <Eye className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={() => handleDownload(module)}
-                            className="btn-outline py-1 px-3"
-                          >
-                            <Download className="w-4 h-4" />
-                          </button>
+                          {userRole === 'teacher' && (
+                            <button
+                              onClick={() => handleDownload(module)}
+                              className="btn-outline py-1 px-3"
+                            >
+                              <Download className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -264,7 +454,7 @@ const ModuleList = ({ modules, onClose, courseId }: ModuleListProps) => {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {!editMode && (
+                {!editMode && userRole === 'teacher' && (
                   <button
                     onClick={() => startEditing(selectedModule)}
                     className="btn-outline py-1 px-3"

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { BookOpen, Clock, ArrowRight } from 'lucide-react';
+import { BookOpen, Clock, ArrowRight, CheckCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 interface Course {
@@ -16,10 +16,16 @@ interface Course {
   }>;
 }
 
+interface ModuleEnrollment {
+  learning_module_id: string;
+  status: 'not_started' | 'started' | 'completed';
+}
+
 const LearnPage = () => {
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
   const [courses, setCourses] = useState<Course[]>([]);
+  const [moduleEnrollments, setModuleEnrollments] = useState<ModuleEnrollment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -28,7 +34,8 @@ const LearnPage = () => {
       return;
     }
     fetchEnrolledCourses();
-  }, [isAuthenticated, navigate]);
+    fetchModuleEnrollments();
+  }, [isAuthenticated, navigate, user]);
 
   const fetchEnrolledCourses = async () => {
     try {
@@ -51,7 +58,11 @@ const LearnPage = () => {
 
       if (error) throw error;
 
-      const formattedCourses = data.map(item => item.course) as Course[];
+      // Make sure data exists and is in the expected format
+      const formattedCourses = data
+        .filter(item => item.course) // Filter out any null course entries
+        .map(item => item.course) as Course[];
+      
       setCourses(formattedCourses);
     } catch (error) {
       console.error('Error fetching enrolled courses:', error);
@@ -59,6 +70,65 @@ const LearnPage = () => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const fetchModuleEnrollments = async () => {
+    if (!user) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('module_enrollments')
+        .select('learning_module_id, status')
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+      
+      setModuleEnrollments(data || []);
+    } catch (error) {
+      console.error('Error fetching module enrollments:', error);
+    }
+  };
+
+  // Get module status from enrollments
+  const getModuleStatus = (moduleId: string): 'not_started' | 'started' | 'completed' => {
+    const enrollment = moduleEnrollments.find(e => e.learning_module_id === moduleId);
+    return enrollment?.status || 'not_started';
+  };
+
+  // Get button text based on module status
+  const getButtonText = (moduleId: string): string => {
+    const status = getModuleStatus(moduleId);
+    switch (status) {
+      case 'completed':
+        return 'Completed';
+      case 'started':
+        return 'Continue';
+      default:
+        return 'Start';
+    }
+  };
+
+  // Get button style based on status
+  const getButtonClass = (moduleId: string): string => {
+    const status = getModuleStatus(moduleId);
+    if (status === 'completed') {
+      return 'btn-success py-1 px-3 flex items-center cursor-not-allowed opacity-70';
+    }
+    return 'btn-outline py-1 px-3 flex items-center';
+  };
+
+  // Determine if button should be disabled
+  const isButtonDisabled = (moduleId: string): boolean => {
+    return getModuleStatus(moduleId) === 'completed';
+  };
+
+  // Get button icon based on status
+  const getButtonIcon = (moduleId: string) => {
+    const status = getModuleStatus(moduleId);
+    if (status === 'completed') {
+      return <CheckCircle className="w-4 h-4 ml-2" />;
+    }
+    return <ArrowRight className="w-4 h-4 ml-2" />;
   };
 
   if (isLoading) {
@@ -117,10 +187,15 @@ const LearnPage = () => {
                           </span>
                         </div>
                         <button 
-                          onClick={() => navigate(`/learn/${course.course_id}/${module.learning_module_id}`)}
-                          className="btn-outline py-1 px-3 flex items-center"
+                          onClick={() => {
+                            if (!isButtonDisabled(module.learning_module_id)) {
+                              navigate(`/learn/${course.course_id}/${module.learning_module_id}`);
+                            }
+                          }}
+                          className={getButtonClass(module.learning_module_id)}
+                          disabled={isButtonDisabled(module.learning_module_id)}
                         >
-                          Start <ArrowRight className="w-4 h-4 ml-2" />
+                          {getButtonText(module.learning_module_id)} {getButtonIcon(module.learning_module_id)}
                         </button>
                       </div>
                     ))}
